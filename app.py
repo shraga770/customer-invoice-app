@@ -76,3 +76,13 @@ sudo certbot --nginx -d your_domain_or_IP --non-interactive --agree-tos -m SHRAG
 sudo systemctl restart nginx
 
 echo "Deployment complete! Your app should be running with SSL enabled."
+from flask import Flask, render_template
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+if __name__ == "__main__":
+    app.run(debug=True)
