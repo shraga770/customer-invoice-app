@@ -1,59 +1,78 @@
-from flask import Flask, request, jsonify, send_file
-from flask_sqlalchemy import SQLAlchemy
+#!/bin/bash
+
+echo "Updating system..."
+sudo apt update && sudo apt upgrade -y
+
+echo "Installing dependencies..."
+sudo apt install -y python3-pip python3-venv nginx certbot python3-certbot-nginx
+
+echo "Setting up virtual environment..."
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Install required fonts for Hebrew support
+sudo apt install -y fonts-freefont-ttf
+
+# Python script to generate Hebrew invoices
+cat > app.py <<EOF
 from fpdf import FPDF
-import os
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///customers.db'
-db = SQLAlchemy(app)
+class InvoicePDF(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 16)
+        self.cell(200, 10, "חשבונית מס", ln=True, align="C")
 
-class Customer(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 10)
+        self.cell(0, 10, "תודה על הקנייה!", align="C")
 
-class Invoice(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    invoice_number = db.Column(db.Integer, unique=True, nullable=False)
-    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    date = db.Column(db.String(20), nullable=False)
+    def add_invoice_details(self, invoice_data):
+        self.set_font("Arial", "", 12)
+        self.cell(0, 10, f'תאריך: {invoice_data["date"]}', ln=True, align="R")
+        self.cell(0, 10, f'לקוח: {invoice_data["customer"]}', ln=True, align="R")
+        self.cell(0, 10, f'סה"כ לתשלום: {invoice_data["total"]} ₪', ln=True, align="R")
 
-@app.route('/customers', methods=['POST'])
-def add_customer():
-    data = request.json
-    new_customer = Customer(name=data['name'], email=data['email'])
-    db.session.add(new_customer)
-    db.session.commit()
-    return jsonify({"message": "Customer added successfully"})
 
-@app.route('/invoices', methods=['POST'])
-def create_invoice():
-    data = request.json
-    last_invoice = Invoice.query.order_by(Invoice.invoice_number.desc()).first()
-    invoice_number = last_invoice.invoice_number + 1 if last_invoice else data.get('invoice_number', 1)
-    
-    new_invoice = Invoice(invoice_number=invoice_number, customer_id=data['customer_id'], amount=data['amount'], date=data['date'])
-    db.session.add(new_invoice)
-    db.session.commit()
-    return jsonify({"message": "Invoice created successfully", "invoice_number": invoice_number})
-
-@app.route('/invoice/<int:invoice_id>/pdf', methods=['GET'])
-def generate_invoice_pdf(invoice_id):
-    invoice = Invoice.query.get(invoice_id)
-    customer = Customer.query.get(invoice.customer_id)
-    pdf = FPDF()
+def generate_invoice(invoice_data):
+    pdf = InvoicePDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Invoice #{invoice.invoice_number}", ln=True, align='C')
-    pdf.cell(200, 10, txt=f"Customer: {customer.name}", ln=True, align='L')
-    pdf.cell(200, 10, txt=f"Amount: ${invoice.amount}", ln=True, align='L')
-    pdf_file = f"invoice_{invoice.invoice_number}.pdf"
-    pdf.output(pdf_file)
-    return send_file(pdf_file, as_attachment=True)
+    pdf.add_invoice_details(invoice_data)
+    pdf.output("invoice.pdf")
 
-if __name__ == '__main__':
- with app.app_context():
-    db.create_all()
+invoice_data = {
+    "date": "04/03/2025",
+    "customer": "ישראל ישראלי",
+    "total": "500"
+}
 
-    app.run(debug=True, host='0.0.0.0', port=5000)
+generate_invoice(invoice_data)
+EOF
+
+echo "Starting Flask app..."
+python app.py &
+
+echo "Configuring Nginx..."
+sudo bash -c 'cat > /etc/nginx/sites-available/flask_app <<EOF
+server {
+    listen 80;
+    server_name your_domain_or_IP;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF'
+
+sudo ln -s /etc/nginx/sites-available/flask_app /etc/nginx/sites-enabled
+sudo nginx -t && sudo systemctl restart nginx
+
+echo "Setting up SSL with Let's Encrypt..."
+sudo certbot --nginx -d your_domain_or_IP --non-interactive --agree-tos -m SHRAGA771@GMAIL.COM
+sudo systemctl restart nginx
+
+echo "Deployment complete! Your app should be running with SSL enabled."
